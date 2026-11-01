@@ -4,6 +4,7 @@ build/
 **/build/
 .build-outputs/
 .aistudio/
+public/
 
 # Local configuration file (sdk.dir, secrets)
 local.properties
