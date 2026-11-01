@@ -49,6 +49,10 @@ class VisionAnalysisModule private constructor() {
     private val _latestScene = MutableStateFlow<SceneAnalysis?>(null)
     val latestScene: StateFlow<SceneAnalysis?> = _latestScene.asStateFlow()
 
+    fun updateScene(category: SceneCategory, summary: String) {
+        _latestScene.value = SceneAnalysis(sceneCategory = category, summary = summary)
+    }
+
     companion object {
         @Volatile
         private var INSTANCE: VisionAnalysisModule? = null

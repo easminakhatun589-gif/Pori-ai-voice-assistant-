@@ -300,4 +300,81 @@ class ProductionReadinessAuditTest {
         assertThat(factory).isInstanceOf(PlayIntegrityAppCheckProviderFactory::class.java)
         assertThat(factory).isSameInstanceAs(PlayIntegrityAppCheckProviderFactory.getInstance())
     }
+
+    @Test
+    fun `MainActivity 5-tab navigation bar and all core features work end-to-end`() = runBlocking {
+        val activity = org.robolectric.Robolectric.buildActivity(com.jarvis.assistant.ui.home.MainActivity::class.java)
+            .create()
+            .start()
+            .resume()
+            .get()
+
+        // 1. Default tab is Home (TAB_HOME)
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_HOME)
+        val homeFrag = activity.supportFragmentManager.findFragmentByTag("tab_fragment_${com.jarvis.assistant.ui.home.MainActivity.TAB_HOME}")
+        assertThat(homeFrag).isNotNull()
+
+        // 2. Navigate to Chatbox (TAB_CHAT)
+        activity.selectTab(com.jarvis.assistant.ui.home.MainActivity.TAB_CHAT)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_CHAT)
+        val chatFrag = activity.supportFragmentManager.findFragmentByTag("tab_fragment_${com.jarvis.assistant.ui.home.MainActivity.TAB_CHAT}")
+        assertThat(chatFrag).isInstanceOf(com.jarvis.assistant.ui.chat.ChatboxFragment::class.java)
+
+        // 3. Navigate to Live Voice (TAB_LIVE_VOICE) and test live voice session toggle
+        activity.selectTab(com.jarvis.assistant.ui.home.MainActivity.TAB_LIVE_VOICE)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_LIVE_VOICE)
+        val voiceFrag = activity.supportFragmentManager.findFragmentByTag("tab_fragment_${com.jarvis.assistant.ui.home.MainActivity.TAB_LIVE_VOICE}")
+        assertThat(voiceFrag).isInstanceOf(com.jarvis.assistant.ui.home.LiveVoiceFragment::class.java)
+
+        activity.handleHoldMicOrOrb()
+        assertThat(activity.viewModel.isSessionOn.value).isTrue()
+        activity.handleMicOrOrbClick()
+        assertThat(activity.viewModel.isMicMuted.value).isTrue()
+        activity.handleHoldMicOrOrb()
+        assertThat(activity.viewModel.isSessionOn.value).isFalse()
+
+        // 4. Navigate to Active Camera (TAB_ACTIVE_CAMERA) and test VisionAnalysisModule & ScreenCaptureManager
+        activity.selectTab(com.jarvis.assistant.ui.home.MainActivity.TAB_ACTIVE_CAMERA)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_ACTIVE_CAMERA)
+        val camFrag = activity.supportFragmentManager.findFragmentByTag("tab_fragment_${com.jarvis.assistant.ui.home.MainActivity.TAB_ACTIVE_CAMERA}")
+        assertThat(camFrag).isInstanceOf(com.jarvis.assistant.vision.ActiveCameraFragment::class.java)
+
+        val visionModule = com.jarvis.assistant.vision.VisionAnalysisModule.getInstance(app)
+        visionModule.updateScene(com.jarvis.assistant.vision.VisionAnalysisModule.SceneCategory.GENERAL, "OCR Test Scene")
+        assertThat(visionModule.latestScene.value?.summary).isEqualTo("OCR Test Scene")
+
+        // 5. Navigate to Settings (TAB_SETTINGS)
+        activity.selectTab(com.jarvis.assistant.ui.home.MainActivity.TAB_SETTINGS)
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_SETTINGS)
+        val settingsFrag = activity.supportFragmentManager.findFragmentByTag("tab_fragment_${com.jarvis.assistant.ui.home.MainActivity.TAB_SETTINGS}")
+        assertThat(settingsFrag).isInstanceOf(com.jarvis.assistant.ui.settings.SettingsFragment::class.java)
+
+        // 6. Verify Back press returns to Home tab
+        activity.onBackPressedDispatcher.onBackPressed()
+        assertThat(activity.viewModel.selectedTab.value).isEqualTo(com.jarvis.assistant.ui.home.MainActivity.TAB_HOME)
+
+        // 7. Verify AlarmRepository CRUD and MasterAutonomousAgent multi-task queue
+        val alarmRepo = com.jarvis.assistant.alarm.data.AlarmRepository.getInstance(app)
+        val created = alarmRepo.addAlarm(6, 45, "Morning Test Alarm")
+        assertThat(alarmRepo.allAlarms.value.any { it.id == created.id }).isTrue()
+        alarmRepo.deleteAlarm(created.id)
+        assertThat(alarmRepo.allAlarms.value.any { it.id == created.id }).isFalse()
+        alarmRepo.undoLastDelete()
+        assertThat(alarmRepo.allAlarms.value.any { it.id == created.id }).isTrue()
+
+        com.jarvis.assistant.automation.agent.MasterAutonomousAgent.executeVoiceCommandPlan(
+            app,
+            "Open Facebook, write a comment, then open Instagram"
+        )
+        val plan = com.jarvis.assistant.automation.agent.MasterAutonomousAgent.currentPlan.value
+        assertThat(plan).isNotNull()
+        assertThat(plan!!.steps.size).isEqualTo(3)
+        com.jarvis.assistant.automation.agent.MasterAutonomousAgent.approveWaitingStepAndContinue(app)
+        assertThat(com.jarvis.assistant.automation.agent.MasterAutonomousAgent.currentPlan.value?.overallStatus)
+            .isEqualTo("COMPLETED")
+    }
 }

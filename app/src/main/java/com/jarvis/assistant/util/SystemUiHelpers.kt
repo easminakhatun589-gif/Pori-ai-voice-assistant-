@@ -11,6 +11,10 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.view.HapticFeedbackConstants
 import android.view.View
@@ -20,35 +24,184 @@ import androidx.core.content.ContextCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.jarvis.assistant.JarvisApp
 import com.jarvis.assistant.R
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
 object HapticFeedbackHelper {
+
     fun performControlClick(view: View?) {
-        try {
-            view?.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-        } catch (_: Exception) {}
+        HapticFeedbackManager.triggerButtonClick(view)
     }
 
     fun performCorePulse(view: View?) {
-        try {
-            view?.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-        } catch (_: Exception) {}
+        HapticFeedbackManager.triggerSuccessConfirm(view)
     }
 }
 
 object HapticFeedbackManager {
-    fun triggerOrbPress(view: View?) {
-        HapticFeedbackHelper.performControlClick(view)
+
+    const val EVENT_BUTTON_CLICK = "BUTTON_CLICK"
+    const val EVENT_NAV_TAB_SELECT = "NAV_TAB_SELECT"
+    const val EVENT_ORB_PRESS = "ORB_PRESS"
+    const val EVENT_VOICE_START = "VOICE_START"
+    const val EVENT_VOICE_STOP = "VOICE_STOP"
+    const val EVENT_SUCCESS_CONFIRM = "SUCCESS_CONFIRM"
+    const val EVENT_SUBTLE_TICK = "SUBTLE_TICK"
+
+    private val _lastHapticEvent = MutableStateFlow("")
+    val lastHapticEvent: StateFlow<String> = _lastHapticEvent.asStateFlow()
+
+    private val _hapticTriggerCount = MutableStateFlow(0)
+    val hapticTriggerCount: StateFlow<Int> = _hapticTriggerCount.asStateFlow()
+
+    private fun recordEvent(eventName: String) {
+        _lastHapticEvent.value = eventName
+        _hapticTriggerCount.value = _hapticTriggerCount.value + 1
     }
 
-    fun triggerPowerToggle(isPowerOn: Boolean, view: View?) {
-        HapticFeedbackHelper.performCorePulse(view)
+    private fun resolveVibrator(context: Context?): Vibrator? {
+        val ctx = context ?: try { JarvisApp.instance } catch (_: Exception) { null } ?: return null
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    fun triggerSubtleTick(view: View?) {
+    private fun vibrateOneShot(context: Context?, durationMs: Long, amplitude: Int) {
         try {
-            view?.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        } catch (_: Exception) {}
+            val vibrator = resolveVibrator(context) ?: return
+            if (!vibrator.hasVibrator()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(
+                    VibrationEffect.createOneShot(
+                        durationMs.coerceAtLeast(1L),
+                        amplitude.coerceIn(1, 255)
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(durationMs.coerceAtLeast(1L))
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun vibrateWaveform(context: Context?, timings: LongArray, amplitudes: IntArray) {
+        try {
+            val vibrator = resolveVibrator(context) ?: return
+            if (!vibrator.hasVibrator()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (vibrator.hasAmplitudeControl()) {
+                    vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+                } else {
+                    vibrator.vibrate(VibrationEffect.createWaveform(timings, -1))
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(timings, -1)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun performViewHaptic(view: View?, feedbackConstant: Int) {
+        try {
+            view?.isHapticFeedbackEnabled = true
+            view?.performHapticFeedback(
+                feedbackConstant,
+                HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    fun triggerButtonClick(view: View?, context: Context? = view?.context) {
+        recordEvent(EVENT_BUTTON_CLICK)
+        performViewHaptic(view, HapticFeedbackConstants.VIRTUAL_KEY)
+        vibrateOneShot(context, durationMs = 14L, amplitude = 110)
+    }
+
+    fun triggerNavTabSelect(view: View?, context: Context? = view?.context) {
+        recordEvent(EVENT_NAV_TAB_SELECT)
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            HapticFeedbackConstants.CONTEXT_CLICK
+        } else {
+            HapticFeedbackConstants.CLOCK_TICK
+        }
+        performViewHaptic(view, constant)
+        vibrateOneShot(context, durationMs = 12L, amplitude = 95)
+    }
+
+    fun triggerOrbPress(view: View?, context: Context? = view?.context) {
+        recordEvent(EVENT_ORB_PRESS)
+        performViewHaptic(view, HapticFeedbackConstants.VIRTUAL_KEY)
+        vibrateOneShot(context, durationMs = 20L, amplitude = 165)
+    }
+
+    fun triggerVoiceStart(context: Context? = null, view: View? = null) {
+        recordEvent(EVENT_VOICE_START)
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.LONG_PRESS
+        }
+        performViewHaptic(view, constant)
+        // Rising two-step tactile pulse indicating live voice assistant activation
+        vibrateWaveform(
+            context = context ?: view?.context,
+            timings = longArrayOf(0L, 18L, 42L, 32L),
+            amplitudes = intArrayOf(0, 140, 0, 255)
+        )
+    }
+
+    fun triggerVoiceStop(context: Context? = null, view: View? = null) {
+        recordEvent(EVENT_VOICE_STOP)
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.REJECT
+        } else {
+            HapticFeedbackConstants.LONG_PRESS
+        }
+        performViewHaptic(view, constant)
+        // Descending two-step tactile pulse indicating live voice assistant stop / mute
+        vibrateWaveform(
+            context = context ?: view?.context,
+            timings = longArrayOf(0L, 28L, 48L, 16L),
+            amplitudes = intArrayOf(0, 230, 0, 110)
+        )
+    }
+
+    fun triggerPowerToggle(isPowerOn: Boolean, view: View?, context: Context? = view?.context) {
+        if (isPowerOn) {
+            triggerVoiceStart(context = context, view = view)
+        } else {
+            triggerVoiceStop(context = context, view = view)
+        }
+    }
+
+    fun triggerSuccessConfirm(view: View?, context: Context? = view?.context) {
+        recordEvent(EVENT_SUCCESS_CONFIRM)
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.LONG_PRESS
+        }
+        performViewHaptic(view, constant)
+        vibrateOneShot(context, durationMs = 24L, amplitude = 190)
+    }
+
+    fun triggerSubtleTick(view: View?, context: Context? = view?.context) {
+        recordEvent(EVENT_SUBTLE_TICK)
+        performViewHaptic(view, HapticFeedbackConstants.CLOCK_TICK)
+        vibrateOneShot(context, durationMs = 8L, amplitude = 70)
     }
 }
 
@@ -218,13 +371,16 @@ object UserProfileDialogHelper {
             .setTitle("User Profile & Location")
             .setView(container)
             .setPositiveButton("Save") { _, _ ->
+                HapticFeedbackManager.triggerSuccessConfirm(null, context)
                 prefs?.userName = input.text?.toString()?.trim().orEmpty()
                 onProfileUpdated()
             }
             .setNeutralButton("Settings") { _, _ ->
+                HapticFeedbackManager.triggerButtonClick(null, context)
                 onOpenFullSettings()
             }
             .setNegativeButton("Refresh Location") { _, _ ->
+                HapticFeedbackManager.triggerButtonClick(null, context)
                 if (!PermissionHelper.hasLocationPermission(context)) {
                     onRequestLocationPermission()
                 } else {
